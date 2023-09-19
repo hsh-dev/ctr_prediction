@@ -2,6 +2,7 @@ from torch.utils.data import Dataset
 import pandas as pd
 import numpy as np
 
+
 class CustomDataset(Dataset):
     
     label_index = 0
@@ -122,8 +123,8 @@ class CustomDataset(Dataset):
             label, 
             np.array(numeric_values, np.float32),
             np.array(categoric_values, np.int32),
-            np.array(numeric_indicators, np.int32),
-            np.array(categoric_indicators, np.int32)
+            np.array(numeric_indicators, np.float32),
+            np.array(categoric_indicators, np.float32)
         )
     
     def __len__(self):

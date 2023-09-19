@@ -1,8 +1,9 @@
-/.DS_Store
-/__pycache__
+*.DS_Store
+*__pycache__
 /figure_1.png
 /figure_2.png
 /meta_data.json
 /report.pdf
 /saved_model
 train_1m.txt
+*.csv

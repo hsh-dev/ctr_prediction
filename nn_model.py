@@ -9,11 +9,12 @@ class NumericEmbeddingLayer(nn.Module):
         embedding_dim: int = 4,
         global_temperature: float = 1e-1,
     ) -> None:
-        super().__init__()
+        super(NumericEmbeddingLayer, self).__init__()
         
         self.bucket_nums = bucket_nums
         self.embedding_dim = embedding_dim
-        self.global_temperature = global_temperature    ## not adaptive
+        self.global_temperature = global_temperature
+        # self.global_temperature = torch.tensor([global_temperature]) ## not adaptive
         
         ## Meta Embedding   shape : bucket nums x embedding dim
         self.meta_embedding = nn.Linear(
@@ -36,19 +37,13 @@ class NumericEmbeddingLayer(nn.Module):
         )       ## bucket x bucket
 
     def forward(self, x):
-        ### x     ## shape : batch size x 1
+        ## shape : batch size x 1
         x_discret = self.discret_kernel(
             self.discret_leaky_relu(self.discret_w(x))
         )    ## shape : batch size x bucket nums
 
-        ## softmax temperature
-        temperature = torch.tile(
-            torch.Tensor([self.global_temperature]), 
-            dims=(x.shape[0], 1)
-        )   ## shape : batch size x 1
-
-        ## calculate softmax
-        x_discret = x_discret / temperature
+        ## calculate softmax       
+        x_discret = x_discret / self.global_temperature
         x_discret = torch.softmax(x_discret, dim = 1)   ## shape : batch size x bucket nums
 
         ## Get Embedding
@@ -77,6 +72,7 @@ class FMLayer(nn.Module):
     
     def __init__(
         self,
+        device,
         feature_nums: int,
         embedding_dim: int,
     ) -> None:
@@ -85,10 +81,17 @@ class FMLayer(nn.Module):
         self.feature_nums = feature_nums
         self.embedding_dim = embedding_dim
         
+        self.diag_tensor = torch.diag(
+            torch.ones(
+                self.feature_nums,
+                dtype=torch.float32
+            ),
+        ).to(device)
+        
         self.order_1_kernel = nn.Linear(self.feature_nums, 1)
         self.order_1_final_kernel = nn.Linear(self.embedding_dim, 1)
-        
-        
+    
+    
     def forward(
         self, 
         x_input_embeddings, 
@@ -96,8 +99,7 @@ class FMLayer(nn.Module):
     ):
         # x_input_embeddings    ## batch size x feature nums x embedding dim  
         # x_indicator           ## batch size x feature nums
-        
-        _batch_size = x_input_embeddings.shape[0]
+        _batch_size = x_input_embeddings.size()[0]
         
         ### order - 1
         x_input_trans = torch.transpose(
@@ -115,20 +117,18 @@ class FMLayer(nn.Module):
             x_input_trans
         )   ## batch size x feature nums x feature nums
 
-        order_2_mask = torch.tile(
-            torch.diag(
-                torch.ones(self.feature_nums),
-            ),
-            dims = (_batch_size, 1, 1)
-        )   
-        order_2_mask = torch.ones_like(order_2_mask) - order_2_mask 
         ## zero mask for self inner product  ## batch size  x feature nums x feature nums
+        order_2_mask = torch.tile(
+            self.diag_tensor,
+            dims = (_batch_size, 1, 1)
+        )
+        order_2_mask = torch.ones_like(order_2_mask) - order_2_mask 
 
+        ## indicator matrix
         indicator_matrix = torch.matmul(
             torch.unsqueeze(x_indicator, 2),
             torch.unsqueeze(x_indicator, 1)
         )   ## batch size x feature nums x feature nums
-
         indicator_matrix = indicator_matrix * order_2_mask
         order_2_output = order_2_output * indicator_matrix
         order_2_output = torch.sum(order_2_output, (1, 2)) / 2  ## batch size
@@ -143,6 +143,7 @@ class DeepLayer(nn.Module):
 
     def __init__(
         self,
+        device: str,
         feature_nums: int,
         embedding_dim: int,
         dropout_ratio: float = 0.6,
@@ -167,9 +168,9 @@ class DeepLayer(nn.Module):
         )
         self.activation_input_layer = nn.ReLU()
         
-        self.dense_layers = []
-        self.activation_layers = []
-        self.dropout_layers = []
+        dense_layers = []
+        activation_layers = []
+        dropout_layers = []
         for i in range(0, hidden_layer_nums):
             _dense_layer = nn.Linear(
                 in_features=hidden_dim,
@@ -178,9 +179,13 @@ class DeepLayer(nn.Module):
             _activation_layer = nn.ReLU()
             _dropout_layer = nn.Dropout(dropout_ratio)
             
-            self.dense_layers.append(_dense_layer)
-            self.activation_layers.append(_activation_layer)
-            self.dropout_layers.append(_dropout_layer)
+            dense_layers.append(_dense_layer)
+            activation_layers.append(_activation_layer)
+            dropout_layers.append(_dropout_layer)
+            
+        self.dense_layers = nn.ModuleList(dense_layers)
+        self.activation_layers = nn.ModuleList(activation_layers)
+        self.dropout_layers = nn.ModuleList(dropout_layers)
         
         self.final_layer = nn.Linear(
             in_features=self.hidden_dim,
@@ -222,46 +227,52 @@ class DeepFM(nn.Module):
     def __init__(
         self,
         catalog_nums: list[int],
-        numerical_len: list[str],
-        categorical_len: list[str],
+        numerical_len: int = 13,
+        categorical_len: int = 26,
         embedding_dim: int = 4,
         hidden_dim: int = 4,
         bucket_nums: int = 4,
-        hidden_layer_nums: int = 3,
-        dropout_ratio: float = 0.6,
+        hidden_layer_nums: int = 4,
+        dropout_ratio: float = 0.3,
+        device: str = "cpu",
     ) -> None:
-        super().__init__()
+        super(DeepFM, self).__init__()
 
-        assert len(catalog_nums) == categorical_len
+        if len(catalog_nums) != categorical_len:
+            raise Exception("Invalid catalog nums")
 
-        self.categorical_layers = [] 
+        categorical_layers = [] 
         for _catalog_num in catalog_nums:        
             categorical_embedding_layer = nn.Embedding(
                 num_embeddings=_catalog_num + 1,
                 embedding_dim=embedding_dim,
                 padding_idx=0
             )
-            self.categorical_layers.append(categorical_embedding_layer)
+            categorical_layers.append(categorical_embedding_layer)
+        self.categorical_layers = nn.ModuleList(categorical_layers)
         
-        self.numerical_layers = [] 
+        numerical_layers = [] 
         for i in range(numerical_len):
             numerical_embedding_layer = NumericEmbeddingLayer(
                 bucket_nums=bucket_nums,
                 embedding_dim=embedding_dim,
                 global_temperature=0.1
             )
-            self.numerical_layers.append(numerical_embedding_layer)
+            numerical_layers.append(numerical_embedding_layer)
+        self.numerical_layers = nn.ModuleList(numerical_layers)
 
         self.x_numerical_indices = [i for i in range(numerical_len)]
         self.x_categorical_indices = [i for i in range(categorical_len)]
 
 
         self.fm_layer = FMLayer(
+            device=device,
             feature_nums=numerical_len + categorical_len,
             embedding_dim=embedding_dim
         )
         
         self.deep_layer = DeepLayer(
+            device=device,
             feature_nums=numerical_len + categorical_len,
             embedding_dim=embedding_dim,
             hidden_dim=hidden_dim,
