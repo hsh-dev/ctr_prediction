@@ -18,24 +18,24 @@ class CustomDataset(Dataset):
         numerical_meta: dict[int, list[int, int]] = None
     ) -> None:
         
+        df = df.reset_index(drop=True)
         df = df.fillna(np.NaN)
-        self.df = df
         
         if dataset_type != "train":
             assert categorical_layers is not None
             assert catalog_nums is not None
             assert numerical_meta is not None
             
-            self.categorical_layers = categorical_layers
+            self.categorical_layers = {int(k) : v for k, v in categorical_layers.items()}
             self.catalog_nums = catalog_nums
-            self.numerical_meta = numerical_meta
+            self.numerical_meta = {int(k) : v for k, v in numerical_meta.items()}
             
         else:
             ## Numerical features
             self.numerical_meta = {}        ## idx -> (min, max)
             for _idx in self.numerical_indices:
-                min_value = self.df[_idx].min()
-                max_value = self.df[_idx].max()
+                min_value = df[_idx].min()
+                max_value = df[_idx].max()
                 
                 self.numerical_meta[_idx] = [float(min_value), float(max_value)]
             
@@ -43,11 +43,11 @@ class CustomDataset(Dataset):
             self.categorical_layers = {}    ## idx -> categorical layer
             self.catalog_nums = []          ## total catalog nums
             for _idx in self.categorical_indices:
-                catalogs = self.df[_idx]\
+                catalogs = df[_idx]\
                             .value_counts(dropna=True)\
                             .index.values
                 catalog_num = len(
-                    self.df[_idx]\
+                    df[_idx]\
                         .value_counts(dropna=True)
                 )
                 
@@ -56,6 +56,9 @@ class CustomDataset(Dataset):
                 )
                 self.categorical_layers[_idx] = categorical_layer
                 self.catalog_nums.append(catalog_num)
+    
+        self.df_dict = df.to_dict("index")
+        self.df_length = len(df)
     
     def export_data(self):
         return self.categorical_layers, self.catalog_nums, self.numerical_meta
@@ -77,10 +80,9 @@ class CustomDataset(Dataset):
         return lookup_layer
     
     def __getitem__(self, index):
-        row = self.df.iloc[index]
-        
+                
         ## 0 -> label, 1~13 -> numerical, 14 ~ 39 -> categorical
-        row_dict = row.to_dict()
+        row_dict = self.df_dict[index]
         label = row_dict[0]
         
         ## Get Numerical Value
@@ -128,5 +130,5 @@ class CustomDataset(Dataset):
         )
     
     def __len__(self):
-        return len(self.df)
+        return self.df_length
         

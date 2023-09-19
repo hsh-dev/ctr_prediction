@@ -1,3 +1,4 @@
+import argparse
 import os
 
 import pandas as pd
@@ -8,32 +9,45 @@ from torch.utils.data import DataLoader
 from utils.tool import save_meta_data
 from utils.dataset import CustomDataset
 from utils.step import step
+from utils.loss import inverse_focal_loss
 from nn_model import DeepFM
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--save_path")
+parser.add_argument("--lr")
+parser.add_argument("--emb_dim")
+parser.add_argument("--hidden_dim")
+parser.add_argument("--dropout")
+parser.add_argument("--gamma")
+parser.add_argument("--inverse_focal_loss", action='store_true')
 
 ### Initialize GPU
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 ### Parameter
 SAVE_PATH = "./saved_model"
-RESULT_PATH = "result.csv"
+TRAIN_RESULT_FILE = "train_result.csv"
+VALID_RESULT_FILE = "valid_result.csv"
 RANDOM_SEED = 999
 
 ### Hyper Parameter
 VALID_RATIO = 0.1
 BATCH_SIZE = 2000
-INTI_LR = 1e-1
-MIN_LR = 1e-2
-TOTAL_EPOCHS = 5
+INIT_LR = 1e-2
+MIN_LR = 1e-4
+TOTAL_EPOCHS = 30
 OVERFITTING_LIMIT = 5
-EMBEDDING_DIM = 4
-HIDDEN_DIM = 4
+EMBEDDING_DIM = 16
+HIDDEN_DIM = 16
 DROPOUT_RATIO = 0.3
+GAMMA = 3
 
 
 def train_model(
     catalog_nums,
     train_loader,
     valid_loader,
+    use_inverse_focal_loss: bool = False,
 ):
     ### 1. Load Model
     model = DeepFM(
@@ -48,17 +62,21 @@ def train_model(
     model.to(DEVICE)
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=INTI_LR, 
+        lr=INIT_LR, 
         betas=(0.99, 0.999),
         weight_decay=1e-5,
     )
-    criterion = nn.BCELoss().to(DEVICE)
     
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    #     optimizer, 
-    #     T_max=5, 
-    #     eta_min=MIN_LR
-    # )
+    if not use_inverse_focal_loss:
+        criterion = nn.BCELoss().to(DEVICE)
+    else:
+        criterion = inverse_focal_loss(gamma=GAMMA)
+    
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, 
+        T_max=10, 
+        eta_min=MIN_LR
+    )
 
     ### 2. Start Train 
     _best_loss = 1e3
@@ -92,7 +110,7 @@ def train_model(
         )
         total_valid_outputs.append(valid_output)
         
-        # scheduler.step()
+        scheduler.step()
 
         ## Save
         if valid_output["loss"] < _best_loss:
@@ -115,7 +133,26 @@ def train_model(
 
 
 if __name__ == "__main__":
+    ## Parse Args
+    args = parser.parse_args()
+    if args.save_path is not None:
+        SAVE_PATH = args.save_path
+    if args.lr is not None:
+        INIT_LR = float(args.lr)
+    if args.emb_dim is not None:
+        EMBEDDING_DIM = int(args.emb_dim)
+    if args.hidden_dim is not None:
+        HIDDEN_DIM = int(args.hidden_dim)
+    if args.dropout is not None:
+        DROPOUT_RATIO = float(args.dropout)
+    if args.gamma is not None:
+        GAMMA = float(args.gamma)
+    if args.inverse_focal_loss is not None:
+        use_inverse_focal_loss = True
+    else:
+        use_inverse_focal_loss = False
 
+    
     ### Load Data
     data = pd.read_csv('train.csv', header=None)
 
@@ -168,11 +205,22 @@ if __name__ == "__main__":
     )
 
     ## 2. Load Model
-    train_output, valid_output = train_model(
+    train_result, valid_result = train_model(
         catalog_nums=catalog_nums,
         train_loader=train_loader,
-        valid_loader=valid_loader
+        valid_loader=valid_loader, 
+        use_inverse_focal_loss=False
     )
     
-    df = pd.DataFrame(train_output, columns=["loss", "accuracy", "precision", "recall", "f1", "auc"])
-    df.to_csv(RESULT_PATH)     
+    train_result_path = os.path.join(SAVE_PATH, TRAIN_RESULT_FILE)
+    pd.DataFrame(
+        train_result, 
+        columns=["loss", "accuracy", "precision", "recall", "f1", "auc"]
+    ).to_csv(train_result_path)
+    
+    valid_result_path = os.path.join(SAVE_PATH, VALID_RESULT_FILE)
+    pd.DataFrame(
+        valid_result, 
+        columns=["loss", "accuracy", "precision", "recall", "f1", "auc"]
+    ).to_csv(valid_result_path)
+
