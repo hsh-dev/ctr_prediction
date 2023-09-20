@@ -9,7 +9,10 @@ from torch.utils.data import DataLoader
 from utils.tool import load_meta_data
 from utils.dataset import CustomDataset
 from utils.step import step
+from utils.metrics import calculate_ece
+
 parser = argparse.ArgumentParser()
+parser.add_argument("--save_path")
 
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -60,8 +63,21 @@ if __name__ == "__main__":
         logging_nums=5
     )
 
+    columns = [
+        "loss", "accuracy", "precision", "recall", 
+        "f1", "auc", "cm", "logits", "labels"
+    ]
+    output = {}
+    for col in columns:
+        output[col] = [test_result[col]]
+
+    ece = calculate_ece(
+        logits=test_result["logits"], 
+        labels=test_result["labels"]
+    )
+    output["ece"] = [ece]
+
     test_result_path = os.path.join(SAVE_PATH, TEST_RESULT_FILE)
     pd.DataFrame(
-        test_result, 
-        columns=["loss", "accuracy", "precision", "recall", "f1", "auc"]
-    ).to_csv(test_result_path)
+        output, 
+    ).to_csv(test_result_path, index=False)
