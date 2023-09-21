@@ -49,7 +49,10 @@ if __name__ == "__main__":
         pin_memory=True,
     )
 
-    model = torch.load(SAVE_PATH + "/weight.pth")
+    model = torch.load(
+        SAVE_PATH + "/weight.pth",
+        map_location=torch.device(DEVICE),
+    )
 
     model.to(DEVICE)
     criterion = nn.BCELoss().to(DEVICE)
@@ -77,7 +80,7 @@ if __name__ == "__main__":
     )
     output["ece"] = [ece]
 
-    test_result_path = os.path.join(SAVE_PATH, TEST_RESULT_FILE)
-    pd.DataFrame(
-        output, 
-    ).to_csv(test_result_path, index=False)
+    # test_result_path = os.path.join(SAVE_PATH, TEST_RESULT_FILE)
+    # pd.DataFrame(
+    #     output, 
+    # ).to_csv(test_result_path, index=False)
